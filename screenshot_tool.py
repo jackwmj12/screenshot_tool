@@ -277,9 +277,29 @@ class ScreenshotTool(QMainWindow):
         self.save_path = self.settings.value("save_path", os.path.expanduser("~/Pictures"))
         self.filename_format = self.settings.value("filename_format", "截图_%Y%m%d_%H%M%S")
 
+        # 隐藏/显示状态
+        self.hidden = False
+        self.hidden_pos = QPoint(100, 100)  # 隐藏时的位置
+        self.hidden_size = QSize(300, 100)  # 隐藏时的大小
+
         # 创建UI
         self.initUI()
         self.capture_screen()
+
+        # 添加快捷键
+        self.setup_shortcuts()
+
+    def setup_shortcuts(self):
+        """设置所有快捷键"""
+        # 隐藏/显示快捷键
+        QShortcut(QKeySequence("Ctrl+Alt+A"), self).activated.connect(self.toggle_visibility)
+        # 其他快捷键
+        QShortcut(QKeySequence("Esc"), self).activated.connect(self.reset_selection)
+        QShortcut(QKeySequence("Enter"), self).activated.connect(self.capture_selected_area)
+        QShortcut(QKeySequence("Return"), self).activated.connect(self.capture_selected_area)
+        QShortcut(QKeySequence("S"), self).activated.connect(self.open_settings)
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_settings)
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self.close)
 
     def initUI(self):
         # 设置窗口为全屏无边框透明
@@ -300,13 +320,76 @@ class ScreenshotTool(QMainWindow):
         # 创建工具栏
         self.create_toolbar()
 
-        # 添加快捷键
-        QShortcut(QKeySequence("Esc"), self).activated.connect(self.reset_selection)
-        QShortcut(QKeySequence("Enter"), self).activated.connect(self.capture_selected_area)
-        QShortcut(QKeySequence("Return"), self).activated.connect(self.capture_selected_area)
-        QShortcut(QKeySequence("S"), self).activated.connect(self.open_settings)
-        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_settings)
-        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self.close)
+        # 创建隐藏时的迷你控制面板
+        self.create_mini_control()
+
+    def create_mini_control(self):
+        """创建隐藏时显示的迷你控制面板"""
+        self.mini_control = QFrame(self)
+        self.mini_control.setGeometry(100, 100, 300, 100)
+        self.mini_control.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.mini_control.setStyleSheet("""
+            QFrame {
+                background-color: rgba(44, 62, 80, 200);
+                border-radius: 8px;
+                border: 2px solid #3498db;
+                padding: 10px;
+            }
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px;
+                min-width: 80px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QLabel {
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 5px;
+            }
+        """)
+        self.mini_control.setVisible(False)
+
+        layout = QVBoxLayout(self.mini_control)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # 标题
+        title = QLabel("截图工具 (Ctrl + Alt + A 显示)")
+        title.setAlignment(Qt.AlignCenter)
+
+        # 显示按钮
+        show_btn = QPushButton("显示截图工具")
+        show_btn.clicked.connect(self.show_screenshot_tool)
+
+        # 退出按钮
+        exit_btn = QPushButton("退出")
+        exit_btn.clicked.connect(self.close)
+
+        layout.addWidget(title)
+        layout.addWidget(show_btn)
+        layout.addWidget(exit_btn)
+
+        # 添加拖动功能
+        self.mini_control.mousePressEvent = self.mini_control_mousePressEvent
+        self.mini_control.mouseMoveEvent = self.mini_control_mouseMoveEvent
+
+    def mini_control_mousePressEvent(self, event):
+        """迷你控制面板的鼠标按下事件"""
+        if event.button() == Qt.LeftButton:
+            self.drag_position = event.globalPos() - self.mini_control.frameGeometry().topLeft()
+            event.accept()
+
+    def mini_control_mouseMoveEvent(self, event):
+        """迷你控制面板的鼠标移动事件"""
+        if event.buttons() == Qt.LeftButton:
+            self.mini_control.move(event.globalPos() - self.drag_position)
+            event.accept()
 
     def create_toolbar(self):
         """创建截图工具栏"""
@@ -345,28 +428,61 @@ class ScreenshotTool(QMainWindow):
         self.capture_btn = QPushButton("截图 (Enter)")
         self.capture_btn.clicked.connect(self.capture_selected_area)
 
-        # 重置按钮
-        self.reset_btn = QPushButton("重置 (R)")
-        self.reset_btn.clicked.connect(self.reset_selection)
-
         # 设置按钮
         self.settings_btn = QPushButton("设置 (S)")
         self.settings_btn.clicked.connect(self.open_settings)
 
         # 关闭按钮
-        self.close_btn = QPushButton("关闭 (Esc)")
+        self.close_btn = QPushButton("关闭 (ctrl+C)")
         self.close_btn.clicked.connect(self.close)
 
         # 状态标签
         self.status_label = QLabel("就绪")
 
         layout.addWidget(self.capture_btn)
-        layout.addWidget(self.reset_btn)
         layout.addWidget(self.settings_btn)
         layout.addWidget(self.close_btn)
         layout.addWidget(self.status_label)
 
         self.toolbar.show()
+
+    def toggle_visibility(self):
+        logger.debug(self.hidden)
+        """切换隐藏/显示状态"""
+        if self.hidden:
+            self.show_screenshot_tool()
+        else:
+            self.hide_screenshot_tool()
+
+    def hide_screenshot_tool(self):
+        """隐藏截图工具"""
+        # 保存当前窗口位置和大小
+        self.hidden_pos = self.pos()
+        self.hidden_size = self.size()
+
+        # 隐藏主窗口
+        self.hide()
+        self.hidden = True
+
+        # 显示迷你控制面板
+        self.mini_control.setGeometry(self.hidden_pos.x(), self.hidden_pos.y(),
+                                      self.mini_control.width(), self.mini_control.height())
+        self.mini_control.show()
+
+    def show_screenshot_tool(self):
+        """显示截图工具"""
+        # 隐藏迷你控制面板
+        self.mini_control.hide()
+
+        # 恢复主窗口
+        self.setGeometry(0, 0, QApplication.primaryScreen().size().width(),
+                         QApplication.primaryScreen().size().height())
+        self.showFullScreen()
+        self.hidden = False
+
+        # 重新捕获屏幕
+        self.capture_screen()
+        self.reset_selection()
 
     def capture_screen(self):
         """捕获整个屏幕并显示在标签上"""
