@@ -930,14 +930,16 @@ class ScreenshotTool(QMainWindow):
         os.makedirs(self.save_path, exist_ok=True)
 
         # 保存截图
-        success = cv2.imwrite(filepath, cv_image)
-        if success:
+        # success = cv2.imwrite(filepath, cv_image)
+        success = cv2.imencode('.png', cv_image)[1].tofile(filepath)  # 替换imwrite
+        logger.debug(success)
+        if os.path.isfile(filepath):
             # 显示状态信息
             self.status_label.setText(f"已保存: {filename}")
-
             # 重置选择区域
             self.reset_selection()
         else:
+            logger.debug("保存失败")
             self.status_label.setText("保存失败")
             QTimer.singleShot(3000, lambda: self.status_label.setText("就绪"))
 
