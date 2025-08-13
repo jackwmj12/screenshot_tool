@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QShortcut,
                              QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,
                              QWidget, QDialog, QDialogButtonBox, QSizePolicy,
                              QFileDialog, QMessageBox, QComboBox, QMenu, QAction,
-                             QStyleFactory, QGridLayout, QFrame, QSizeGrip, QCheckBox)
+                             QStyleFactory, QGridLayout, QFrame, QSizeGrip, QCheckBox, QSystemTrayIcon)
 from PyQt5.QtCore import Qt, QPoint, QRect, QSize, QSettings, QTimer
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QPen, QColor, QScreen,
                          QKeySequence, QFont, QFontMetrics, QValidator,
@@ -33,7 +33,7 @@ class SizeInputDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("修改尺寸")
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.setFixedSize(300, 150)
+        self.setFixedSize(300, 180)
 
         # 创建布局
         layout = QVBoxLayout()
@@ -57,6 +57,10 @@ class SizeInputDialog(QDialog):
         self.lock_aspect.setChecked(False)
         self.aspect_ratio = current_size.width() / current_size.height() if current_size.height() != 0 else 1
 
+        # 锁定大小复选框
+        self.lock_size = QCheckBox("锁定大小")
+        self.lock_size.setChecked(False)
+
         # 连接信号
         self.width_edit.textEdited.connect(self.update_height)
         self.height_edit.textEdited.connect(self.update_width)
@@ -68,6 +72,7 @@ class SizeInputDialog(QDialog):
         input_layout.addWidget(height_label, 1, 0)
         input_layout.addWidget(self.height_edit, 1, 1)
         input_layout.addWidget(self.lock_aspect, 2, 0, 1, 2)
+        input_layout.addWidget(self.lock_size, 3, 0, 1, 2)
 
         # 添加按钮
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -157,22 +162,84 @@ class SizeInputDialog(QDialog):
         except ValueError:
             return None
 
+    def get_lock_size(self):
+        """获取是否锁定大小"""
+        return self.lock_size.isChecked()
+
+
+class HotkeyEdit(QLineEdit):
+    def __init__(self, hotkey="", parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(40)
+        self.setMinimumWidth(200)
+        self.setStyleSheet("""
+            QLineEdit {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: 2px solid #3498db;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 16px;
+                font-family: Consolas, Monaco, monospace;
+                font-weight: bold;
+            }
+            QLineEdit:focus {
+                border: 3px solid #5dade2;
+                background-color: #2c3e50;
+            }
+            QLineEdit:hover {
+                border: 2px solid #5dade2;
+            }
+        """)
+        self.hotkey = hotkey
+        self.setText(hotkey)
+        
+    def keyPressEvent(self, event):
+        """捕获按键组合"""
+        key = event.key()
+        modifiers = event.modifiers()
+        
+        if key == Qt.Key_Escape:
+            self.setText("")
+            self.hotkey = ""
+            return
+            
+        # 忽略单独的修饰键
+        if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+            return
+            
+        # 使用QKeySequence获取完整的快捷键字符串
+        key_sequence = QKeySequence(key | modifiers)
+        hotkey = key_sequence.toString()
+        
+        if hotkey:
+            self.setText(hotkey)
+            self.hotkey = hotkey
+        
+    def get_hotkey(self):
+        return self.hotkey
+
 
 class SettingsDialog(QDialog):
-    def __init__(self, save_path, parent=None):
+    def __init__(self, save_path, hotkeys, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
-        self.setFixedSize(400, 200)
+        self.setFixedSize(700, 720)
 
         # 创建布局
         layout = QVBoxLayout()
 
         # 保存路径设置
         path_layout = QHBoxLayout()
+        path_layout.setSpacing(10)
         path_label = QLabel("保存路径:")
+        path_label.setStyleSheet("font-size: 16px; padding: 5px;")
         self.path_edit = QLineEdit(save_path)
         self.path_edit.setReadOnly(True)
+        self.path_edit.setMinimumHeight(40)
         browse_btn = QPushButton("浏览...")
         browse_btn.clicked.connect(self.browse_folder)
 
@@ -182,11 +249,54 @@ class SettingsDialog(QDialog):
 
         # 文件名格式
         format_layout = QHBoxLayout()
+        format_layout.setSpacing(10)
         format_label = QLabel("文件名格式:")
+        format_label.setStyleSheet("font-size: 16px; padding: 5px;")
         self.format_combo = QComboBox()
         self.format_combo.addItems(["截图_%Y%m%d_%H%M%S", "截图_%Y%m%d_%H%M%S_%f", "screenshot_%Y%m%d_%H%M%S"])
+        self.format_combo.setMinimumHeight(40)
         format_layout.addWidget(format_label)
         format_layout.addWidget(self.format_combo, 1)
+
+        # 热键设置
+        hotkeys_group = QFrame()
+        hotkeys_group.setStyleSheet("""
+            QFrame {
+                background-color: #34495e;
+                border: 1px solid #3498db;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        hotkeys_layout = QGridLayout(hotkeys_group)
+        hotkeys_layout.setSpacing(20)
+        hotkeys_layout.setColumnMinimumWidth(0, 200)
+        hotkeys_layout.setColumnStretch(1, 1)
+        
+        hotkeys_title = QLabel("快捷键设置")
+        hotkeys_title.setStyleSheet("font-weight: bold; font-size: 18px; padding: 5px; min-height: 40px;")
+        hotkeys_layout.addWidget(hotkeys_title, 0, 0, 1, 2)
+
+        # 创建热键输入框
+        self.hotkey_inputs = {}
+        hotkey_labels = {
+            'toggle_visibility': '显示/隐藏工具',
+            'capture_area': '截图',
+            'open_settings': '打开设置',
+            'quit_app': '退出应用'
+        }
+
+        row = 1
+        for key, label in hotkey_labels.items():
+            label_widget = QLabel(label)
+            label_widget.setStyleSheet("font-size: 16px; font-weight: bold; padding: 5px; min-height: 20px;")
+            label_widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            hotkey_edit = HotkeyEdit(hotkeys.get(key, ""))
+            self.hotkey_inputs[key] = hotkey_edit
+            
+            hotkeys_layout.addWidget(label_widget, row, 0)
+            hotkeys_layout.addWidget(hotkey_edit, row, 1)
+            row += 1
 
         # 按钮
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -194,8 +304,14 @@ class SettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
 
         # 添加到主布局
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
         layout.addLayout(path_layout)
+        layout.addSpacing(10)
         layout.addLayout(format_layout)
+        layout.addSpacing(10)
+        layout.addWidget(hotkeys_group)
+        layout.addSpacing(15)
         layout.addWidget(button_box)
         self.setLayout(layout)
 
@@ -207,9 +323,14 @@ class SettingsDialog(QDialog):
                 border: 2px solid #3498db;
                 border-radius: 8px;
             }
-            QLabel, QComboBox, QLineEdit, QPushButton {
-                font-size: 14px;
-                padding: 5px;
+            QLabel {
+                font-size: 16px;
+                border: 1px solid #3498db;
+                border-radius: 4px;
+            }
+            QComboBox, QLineEdit {
+                font-size: 16px;
+                padding: 10px;
             }
             QLineEdit {
                 background-color: #34495e;
@@ -221,9 +342,10 @@ class SettingsDialog(QDialog):
                 background-color: #3498db;
                 color: white;
                 border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                min-width: 80px;
+                padding: 12px 20px;
+                border-radius: 6px;
+                min-width: 100px;
+                font-size: 16px;
             }
             QPushButton:hover {
                 background-color: #2980b9;
@@ -233,7 +355,7 @@ class SettingsDialog(QDialog):
                 color: #ecf0f1;
                 border: 1px solid #3498db;
                 border-radius: 4px;
-                padding: 5px;
+                padding: 10px;
             }
         """)
 
@@ -245,7 +367,23 @@ class SettingsDialog(QDialog):
 
     def get_settings(self):
         """获取设置"""
-        return self.path_edit.text(), self.format_combo.currentText()
+        hotkeys = {}
+        for key, edit in self.hotkey_inputs.items():
+            hotkeys[key] = edit.get_hotkey()
+        return self.path_edit.text(), self.format_combo.currentText(), hotkeys
+
+    def validate_hotkeys(self):
+        """验证热键是否有冲突"""
+        hotkeys = {}
+        conflicts = []
+        
+        for key, edit in self.hotkey_inputs.items():
+            hotkey = edit.get_hotkey()
+            if hotkey and hotkey in hotkeys:
+                conflicts.append(f"'{hotkey}' 被 '{hotkeys[hotkey]}' 和 '{key}' 同时使用")
+            hotkeys[hotkey] = key
+            
+        return conflicts
 
 
 class ScreenshotTool(QMainWindow):
@@ -276,30 +414,70 @@ class ScreenshotTool(QMainWindow):
         self.settings = QSettings("ScreenshotTool", "ScreenshotTool")
         self.save_path = self.settings.value("save_path", os.path.expanduser("~/Pictures"))
         self.filename_format = self.settings.value("filename_format", "截图_%Y%m%d_%H%M%S")
+        
+        # 锁定大小设置
+        self.locked_size = QSize(
+            int(self.settings.value("locked_width", 800)),
+            int(self.settings.value("locked_height", 600))
+        )
+        self.lock_size_enabled = self.settings.value("lock_size_enabled", False, type=bool)
+        
+        # 默认热键设置
+        self.default_hotkeys = {
+            'toggle_visibility': 'Ctrl+Alt+A',
+            'capture_area': 'Enter',
+            'open_settings': 'Ctrl+S',
+            'quit_app': 'Ctrl+Q'
+        }
+        
+        # 加载热键设置
+        self.hotkeys = {}
+        for key, default in self.default_hotkeys.items():
+            self.hotkeys[key] = self.settings.value(f"hotkey_{key}", default)
 
         # 隐藏/显示状态
         self.hidden = False
         self.hidden_pos = QPoint(100, 100)  # 隐藏时的位置
         self.hidden_size = QSize(300, 100)  # 隐藏时的大小
 
+        # 系统托盘
+        self.tray_icon = None
+
+        # 快捷键对象
+        self.shortcuts = {}
+
         # 创建UI
         self.initUI()
         self.capture_screen()
+        
+        # 如果启用了锁定大小，设置初始矩形
+        if self.lock_size_enabled:
+            self.setup_locked_size()
 
         # 添加快捷键
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
         """设置所有快捷键"""
-        # 隐藏/显示快捷键
-        QShortcut(QKeySequence("Ctrl+Alt+A"), self).activated.connect(self.toggle_visibility)
-        # 其他快捷键
-        QShortcut(QKeySequence("Esc"), self).activated.connect(self.reset_selection)
-        QShortcut(QKeySequence("Enter"), self).activated.connect(self.capture_selected_area)
-        QShortcut(QKeySequence("Return"), self).activated.connect(self.capture_selected_area)
-        QShortcut(QKeySequence("S"), self).activated.connect(self.open_settings)
-        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_settings)
-        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self.close)
+        # 清除现有快捷键
+        for shortcut in self.shortcuts.values():
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+        self.shortcuts.clear()
+        
+        # 设置新的快捷键
+        self.shortcuts['toggle_visibility'] = QShortcut(QKeySequence(self.hotkeys['toggle_visibility']), self)
+        self.shortcuts['toggle_visibility'].activated.connect(self.toggle_visibility)
+        
+        self.shortcuts['capture_area'] = QShortcut(QKeySequence(self.hotkeys['capture_area']), self)
+        self.shortcuts['capture_area'].activated.connect(self.capture_selected_area)
+        
+        self.shortcuts['open_settings'] = QShortcut(QKeySequence(self.hotkeys['open_settings']), self)
+        self.shortcuts['open_settings'].activated.connect(self.open_settings)
+        
+        
+        self.shortcuts['quit_app'] = QShortcut(QKeySequence(self.hotkeys['quit_app']), self)
+        self.shortcuts['quit_app'].activated.connect(self.quit_application)
 
     def initUI(self):
         # 设置窗口为全屏无边框透明
@@ -322,6 +500,9 @@ class ScreenshotTool(QMainWindow):
 
         # 创建隐藏时的迷你控制面板
         self.create_mini_control()
+        
+        # 创建系统托盘
+        self.create_system_tray()
 
     def create_mini_control(self):
         """创建隐藏时显示的迷你控制面板"""
@@ -391,6 +572,82 @@ class ScreenshotTool(QMainWindow):
             self.mini_control.move(event.globalPos() - self.drag_position)
             event.accept()
 
+    def create_system_tray(self):
+        """创建系统托盘图标"""
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = QSystemTrayIcon(self)
+            
+            # 创建托盘图标（使用应用图标或默认图标）
+            tray_icon = QIcon()
+            # 创建一个简单的图标作为托盘图标
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.blue)
+            painter = QPainter(pixmap)
+            painter.setPen(QPen(Qt.white, 2))
+            painter.drawRect(2, 2, 12, 12)
+            painter.drawText(4, 12, "S")
+            painter.end()
+            tray_icon.addPixmap(pixmap)
+            self.tray_icon.setIcon(tray_icon)
+            
+            # 创建托盘菜单
+            tray_menu = QMenu()
+            
+            show_action = QAction("显示截图工具", self)
+            show_action.triggered.connect(self.show_from_tray)
+            tray_menu.addAction(show_action)
+            
+            hide_action = QAction("隐藏截图工具", self)
+            hide_action.triggered.connect(self.hide_to_tray)
+            tray_menu.addAction(hide_action)
+            
+            tray_menu.addSeparator()
+            
+            settings_action = QAction("设置", self)
+            settings_action.triggered.connect(self.open_settings)
+            tray_menu.addAction(settings_action)
+            
+            tray_menu.addSeparator()
+            
+            quit_action = QAction("退出", self)
+            quit_action.triggered.connect(self.quit_application)
+            tray_menu.addAction(quit_action)
+            
+            self.tray_icon.setContextMenu(tray_menu)
+            self.tray_icon.setToolTip("截图工具")
+            
+            # 连接托盘图标激活信号
+            self.tray_icon.activated.connect(self.tray_icon_activated)
+            
+            self.tray_icon.show()
+
+    def tray_icon_activated(self, reason):
+        """托盘图标激活处理"""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_from_tray()
+        elif reason == QSystemTrayIcon.Trigger:
+            # 单击显示上下文菜单
+            self.tray_icon.contextMenu().popup(QCursor.pos())
+
+    def show_from_tray(self):
+        """从托盘显示截图工具"""
+        if self.hidden:
+            self.show_screenshot_tool()
+        else:
+            self.showNormal()
+            self.activateWindow()
+
+    def hide_to_tray(self):
+        """隐藏截图工具到托盘"""
+        if not self.hidden:
+            self.hide_screenshot_tool()
+
+    def quit_application(self):
+        """退出应用程序"""
+        if self.tray_icon:
+            self.tray_icon.hide()
+        self.close()
+
     def create_toolbar(self):
         """创建截图工具栏"""
         """创建截图工具栏"""
@@ -425,22 +682,27 @@ class ScreenshotTool(QMainWindow):
         layout.setContentsMargins(10, 5, 10, 5)
 
         # 截图按钮
-        self.capture_btn = QPushButton("截图 (Enter)")
+        self.capture_btn = QPushButton("截图")
         self.capture_btn.clicked.connect(self.capture_selected_area)
 
         # 设置按钮
-        self.settings_btn = QPushButton("设置 (S)")
+        self.settings_btn = QPushButton("设置")
         self.settings_btn.clicked.connect(self.open_settings)
 
+        # 最小化
+        self.minimize_btn = QPushButton("最小化")
+        self.minimize_btn.clicked.connect(self.hide_to_tray)
+        
         # 关闭按钮
-        self.close_btn = QPushButton("关闭 (ctrl+C)")
-        self.close_btn.clicked.connect(self.close)
+        self.close_btn = QPushButton("关闭")
+        self.close_btn.clicked.connect(self.quit_application)
 
         # 状态标签
         self.status_label = QLabel("就绪")
 
         layout.addWidget(self.capture_btn)
         layout.addWidget(self.settings_btn)
+        layout.addWidget(self.minimize_btn)
         layout.addWidget(self.close_btn)
         layout.addWidget(self.status_label)
 
@@ -454,11 +716,31 @@ class ScreenshotTool(QMainWindow):
         else:
             self.hide_screenshot_tool()
 
+    def clear_canvas(self):
+        """清空画布"""
+        # 清空截图和矩形选择
+        self.screenshot = QPixmap()
+        self.rect = QRect()
+        self.start_point = QPoint()
+        self.end_point = QPoint()
+        
+        # 清空标签显示
+        self.label.clear()
+        self.label.setText("截图工具已隐藏")
+        self.label.setStyleSheet("color: white; font-size: 24px;")
+        
+        # 强制刷新显示
+        self.label.repaint()
+        self.repaint()
+
     def hide_screenshot_tool(self):
         """隐藏截图工具"""
         # 保存当前窗口位置和大小
         self.hidden_pos = self.pos()
         self.hidden_size = self.size()
+
+        # 清空画布
+        self.clear_canvas()
 
         # 隐藏主窗口
         self.hide()
@@ -480,23 +762,63 @@ class ScreenshotTool(QMainWindow):
         self.showFullScreen()
         self.hidden = False
 
-        # 重新捕获屏幕
+        # 强制清空之前的显示
+        self.label.clear()
+        self.label.setStyleSheet("")
+        
+        # 延迟重新捕获屏幕，确保窗口完全显示
+        QTimer.singleShot(50, self.delayed_show_screen)
+
+    def delayed_show_screen(self):
+        """延迟重新捕获屏幕"""
         self.capture_screen()
         self.reset_selection()
 
     def capture_screen(self):
         """捕获整个屏幕并显示在标签上"""
-        """捕获整个屏幕并显示在标签上"""
+        # 确保清除之前的截图
+        self.screenshot = QPixmap()
+        
+        # 获取主屏幕并捕获
         screen = QApplication.primaryScreen()
-        self.screenshot = screen.grabWindow(0)
-        self.label.setPixmap(self.screenshot)
+        if screen:
+            self.screenshot = screen.grabWindow(0)
+            if not self.screenshot.isNull():
+                self.label.setPixmap(self.screenshot)
+            else:
+                # 如果捕获失败，显示错误信息
+                self.label.setText("屏幕捕获失败")
+                self.label.setStyleSheet("color: red; font-size: 24px;")
+        
         self.reset_selection()
+
+    def setup_locked_size(self):
+        """设置锁定大小的矩形"""
+        screen_size = QApplication.primaryScreen().size()
+        center_x = screen_size.width() // 2
+        center_y = screen_size.height() // 2
+        
+        self.rect = QRect(
+            center_x - self.locked_size.width() // 2,
+            center_y - self.locked_size.height() // 2,
+            self.locked_size.width(),
+            self.locked_size.height()
+        )
+        
+        # 确保矩形在屏幕内
+        self.rect = self.rect.intersected(QRect(0, 0, screen_size.width(), screen_size.height()))
 
     def reset_selection(self):
         """重置选择区域"""
-        self.rect = QRect()
-        self.start_point = QPoint()
-        self.end_point = QPoint()
+        if self.lock_size_enabled:
+            # 锁定大小时重新居中矩形
+            self.setup_locked_size()
+        else:
+            # 正常重置
+            self.rect = QRect()
+            self.start_point = QPoint()
+            self.end_point = QPoint()
+        
         self.dragging = False
         self.dragging_rect = False
         self.dragging_control_point = False
@@ -514,30 +836,40 @@ class ScreenshotTool(QMainWindow):
                 self.open_size_dialog()
                 return
 
-            # 检查是否在控制点上
-            self.active_control_point = self.get_control_point_at(event.pos())
-            if self.active_control_point:
-                self.dragging_control_point = True
-                self.drag_offset = event.pos()
+            # 如果启用了锁定大小，只允许拖动整个矩形
+            if self.lock_size_enabled and self.rect.isValid():
+                if self.rect.contains(event.pos()):
+                    self.dragging_rect = True
+                    self.drag_offset = event.pos() - self.rect.topLeft()
                 return
 
-            # 检查是否在矩形区域内
-            if self.rect.isValid() and self.rect.contains(event.pos()):
-                # 拖动矩形模式
-                self.dragging_rect = True
-                self.drag_offset = event.pos() - self.rect.topLeft()
-            else:
-                # 绘制新矩形模式
-                self.dragging = True
-                self.start_point = event.pos()
-                self.end_point = event.pos()
-                self.rect = QRect()
+            # 正常模式下的处理
+            if not self.lock_size_enabled:
+                # 检查是否在控制点上
+                self.active_control_point = self.get_control_point_at(event.pos())
+                if self.active_control_point:
+                    self.dragging_control_point = True
+                    self.drag_offset = event.pos()
+                    return
+
+                # 检查是否在矩形区域内
+                if self.rect.isValid() and self.rect.contains(event.pos()):
+                    # 拖动矩形模式
+                    self.dragging_rect = True
+                    self.drag_offset = event.pos() - self.rect.topLeft()
+                else:
+                    # 绘制新矩形模式
+                    if not self.lock_size_enabled:
+                        self.dragging = True
+                        self.start_point = event.pos()
+                        self.end_point = event.pos()
+                        self.rect = QRect()
 
             self.update()
 
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
-        if self.dragging:
+        if self.dragging and not self.lock_size_enabled:
             self.end_point = event.pos()
             self.rect = self.get_selection_rect()
             self.update()
@@ -553,23 +885,31 @@ class ScreenshotTool(QMainWindow):
 
             # 更新矩形位置
             self.rect.moveTo(new_top_left)
-            self.start_point = self.rect.topLeft()
-            self.end_point = self.rect.bottomRight()
+            if not self.lock_size_enabled:
+                self.start_point = self.rect.topLeft()
+                self.end_point = self.rect.bottomRight()
             self.update()
-        elif self.dragging_control_point and self.active_control_point and self.rect.isValid():
+        elif self.dragging_control_point and self.active_control_point and self.rect.isValid() and not self.lock_size_enabled:
             # 调整控制点位置
             self.adjust_rect_from_control_point(event.pos())
             self.update()
         elif self.rect.isValid():
             # 更新鼠标光标形状
-            control_point = self.get_control_point_at(event.pos())
-            if control_point:
-                cursor = self.get_cursor_for_control_point(control_point)
-                self.setCursor(cursor)
-            elif self.rect.contains(event.pos()):
-                self.setCursor(Qt.SizeAllCursor)
+            if self.lock_size_enabled:
+                # 锁定大小时只显示移动光标
+                if self.rect.contains(event.pos()):
+                    self.setCursor(Qt.SizeAllCursor)
+                else:
+                    self.setCursor(Qt.ArrowCursor)
             else:
-                self.setCursor(Qt.ArrowCursor)
+                control_point = self.get_control_point_at(event.pos())
+                if control_point:
+                    cursor = self.get_cursor_for_control_point(control_point)
+                    self.setCursor(cursor)
+                elif self.rect.contains(event.pos()):
+                    self.setCursor(Qt.SizeAllCursor)
+                else:
+                    self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
@@ -588,12 +928,30 @@ class ScreenshotTool(QMainWindow):
 
     def keyPressEvent(self, event):
         """键盘事件处理"""
-        if event.key() == Qt.Key_Escape:
-            self.close()
-        elif event.key() in [Qt.Key_Return, Qt.Key_Enter]:
-            self.capture_selected_area()
+        # 使用QKeySequence来匹配配置的快捷键
+        key_sequence = QKeySequence(event.key() | event.modifiers())
+        
+        # 检查是否匹配配置的快捷键
+        for action, hotkey in self.hotkeys.items():
+            if str(key_sequence) == str(QKeySequence(hotkey)):
+                if action == 'capture_area':
+                    self.capture_selected_area()
+                elif action == 'open_settings':
+                    self.open_settings()
+                elif action == 'quit_app':
+                    self.quit_application()
+                return
+                
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        """窗口关闭事件处理"""
+        if self.tray_icon and self.tray_icon.isVisible():
+            self.hide_to_tray()
+            event.ignore()
         else:
-            super().keyPressEvent(event)
+            self.quit_application()
+            event.accept()
 
     def paintEvent(self, event):
         """绘制事件 - 绘制矩形选择框和尺寸文本"""
@@ -618,7 +976,8 @@ class ScreenshotTool(QMainWindow):
                 painter.drawRect(rect)
 
                 # 绘制控制点和调整手柄
-                self.draw_control_points(painter, rect)
+                if not self.lock_size_enabled:
+                    self.draw_control_points(painter, rect)
 
                 # 绘制尺寸文本
                 font = QFont("Arial", 12)
@@ -650,6 +1009,9 @@ class ScreenshotTool(QMainWindow):
                 # 绘制文本
                 painter.setPen(Qt.yellow)
                 painter.drawText(text_x, text_y, text)
+                painter.drawText(text_x, text_y - rect.height() - text_height - 10, f"{rect.x()} : {rect.y()}(起点坐标)")
+
+                logger.debug(f"当前截图 x: {rect.x()} y: {rect.y()} width: {rect.width()} height: {rect.height()}")
 
             painter.end()
             self.label.setPixmap(pixmap)
@@ -816,31 +1178,44 @@ class ScreenshotTool(QMainWindow):
         dialog = SizeInputDialog(self.rect.size(), self)
         if dialog.exec_() == QDialog.Accepted:
             new_size = dialog.get_size()
+            lock_size = dialog.get_lock_size()
             if new_size and new_size.isValid() and new_size.width() >= 10 and new_size.height() >= 10:
-                # 保持矩形中心点不变
-                center = self.rect.center()
-                new_rect = QRect(0, 0, new_size.width(), new_size.height())
-                new_rect.moveCenter(center)
+                # 更新锁定大小设置
+                self.locked_size = new_size
+                self.lock_size_enabled = lock_size
+                
+                # 保存到配置
+                self.settings.setValue("locked_width", new_size.width())
+                self.settings.setValue("locked_height", new_size.height())
+                self.settings.setValue("lock_size_enabled", lock_size)
+                
+                if not lock_size:
+                    # 保持矩形中心点不变
+                    center = self.rect.center()
+                    new_rect = QRect(0, 0, new_size.width(), new_size.height())
+                    new_rect.moveCenter(center)
 
-                # 确保矩形在屏幕内
-                if new_rect.left() < 0:
-                    new_rect.moveLeft(0)
-                if new_rect.top() < 0:
-                    new_rect.moveTop(0)
-                if new_rect.right() > self.width():
-                    new_rect.moveRight(self.width())
-                if new_rect.bottom() > self.height():
-                    new_rect.moveBottom(self.height())
+                    # 确保矩形在屏幕内
+                    if new_rect.left() < 0:
+                        new_rect.moveLeft(0)
+                    if new_rect.top() < 0:
+                        new_rect.moveTop(0)
+                    if new_rect.right() > self.width():
+                        new_rect.moveRight(self.width())
+                    if new_rect.bottom() > self.height():
+                        new_rect.moveBottom(self.height())
 
-                self.rect = new_rect
+                    self.rect = new_rect
+                
                 self.update()
 
     def open_settings(self):
         """打开设置对话框"""
-        dialog = SettingsDialog(self.save_path, self)
+        dialog = SettingsDialog(self.save_path, self.hotkeys, self)
         if dialog.exec_() == QDialog.Accepted:
-            self.save_path, self.filename_format = dialog.get_settings()
+            self.save_path, self.filename_format, self.hotkeys = dialog.get_settings()
             self.save_settings()
+            self.setup_shortcuts()  # 重新设置快捷键
 
     def save_settings(self):
         """保存设置"""
@@ -867,15 +1242,32 @@ class ScreenshotTool(QMainWindow):
             QMessageBox.warning(self, "错误", f"文件名格式无效: {str(e)}")
             return
 
+        # 验证热键设置
+        hotkey_map = {}
+        for key, hotkey in self.hotkeys.items():
+            if not hotkey:
+                QMessageBox.warning(self, "错误", f"{key} 的快捷键不能为空")
+                return
+            if hotkey in hotkey_map:
+                QMessageBox.warning(self, "错误", f"快捷键 '{hotkey}' 已被 '{hotkey_map[hotkey]}' 和 '{key}' 同时使用")
+                return
+            hotkey_map[hotkey] = key
+
         # 保存设置
         self.save_path = new_path
         self.filename_format = new_format
 
         logger.debug(f"save_path: {self.save_path}")
         logger.debug(f"filename_format: {self.filename_format}")
+        logger.debug(f"hotkeys: {self.hotkeys}")
 
         self.settings.setValue("save_path", new_path)
         self.settings.setValue("filename_format", new_format)
+        
+        # 保存热键设置
+        for key, hotkey in self.hotkeys.items():
+            self.settings.setValue(f"hotkey_{key}", hotkey)
+            
         QMessageBox.information(self, "设置已保存", "设置已成功保存！")
 
     def capture_selected_area(self):
@@ -966,4 +1358,14 @@ if __name__ == "__main__":
 
     window = ScreenshotTool()
     window.showFullScreen()
+    
+    # 显示托盘提示信息
+    if window.tray_icon and window.tray_icon.isSystemTrayAvailable():
+        window.tray_icon.showMessage(
+            "截图工具已启动",
+            "程序已最小化到系统托盘\n双击托盘图标可显示/隐藏\n右键托盘图标可查看更多选项",
+            QSystemTrayIcon.Information,
+            3000
+        )
+    
     sys.exit(app.exec_())
